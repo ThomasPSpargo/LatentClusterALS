@@ -37,7 +37,7 @@ wrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=1)
   
   #Train the model
   #Inherit dataframe and tuning parameters from input. Only necessary column is the factor class 'C'
-  xgbfit <- train(C~.,
+  fit <- train(C~.,
                   data = data, 
                   method = "xgbTree",
                   metric= opt$tuneFor, #Caret's interpretation of optimisation metric
@@ -53,33 +53,36 @@ wrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=1)
 
   end.time <- Sys.time()
   cat("Done! Best params:\n")
-  print(xgbfit$bestTune)
+  print(fit$bestTune)
   
   cat("Finishing at:",as.character(end.time),"\n")
   time.taken <- end.time - start.time
   cat('Time taken for tuning was ',as.character(round(time.taken,2)),attr(time.taken, 'units'),'\n------------\n')
   
   #Save all important parameters to be passed onwards
-  savelist <- list(xgbfit=xgbfit,ctrl=ctrl,tuneFor=opt$tuneFor,rowwiseWeights=rowwiseWeights,tuneGrid=tuneGrid)
+  savelist <- list(fit=fit,ctrl=ctrl,tuneFor=opt$tuneFor,rowwiseWeights=rowwiseWeights,tuneGrid=tuneGrid)
   
   #Save fit and parameters to file
   saveRDS(savelist, file = outputFile)
   
-  return(xgbfit)
+  return(fit)
 }
 
 
 #### Recursive wrapping of wrapTrain to permit automatic retuning at edges
-recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=1,gridSettings,updateNcores=TRUE,maxloops=5,logToFile=NA){
+recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=1,gridSettings,updateNcores=TRUE,maxloops=5){
   
-  if(!is.na(logToFile) && is.character(logToFile)){
-    writetoFile <- TRUE
-    if(!file.exists(logToFile)){file.create(logToFile)}
-    sink(logToFile,append = TRUE)
-  }
+  #Store all caret train objects in a list
+  allTrains <- list()
   
-  #Perform the First Tune
-  xgbfit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=ncores)
+  #Perform the first tune
+  fit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=ncores)
+  
+  #Save to list
+  allTrains[[1]] <- fit
+  
+  #Save the results for concatenation with any repeated loops
+  allResults<- cbind(nLoopedRetunes=0,fit$results)
   
   #Identify the parameters that are (still) being tuned
   tunedParams<- names(tuneGrid[sapply(tuneGrid,function(x)length(unique(x)))>1])
@@ -90,11 +93,11 @@ recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,
   #Check whether any of the tune parameters are at the edges of the grid search, and if they are and are not at the defined min or max, repeat tuning
   while(any(
     mapply(function(x,y){x %in% y}, #Logic check for whether tuned params are at the edge of the tuneGrid
-           as.numeric(xgbfit$bestTune[tunedParams]), #X is the best-tune values of the tuneGrid
+           as.numeric(fit$bestTune[tunedParams]), #X is the best-tune values of the tuneGrid
            lapply(tuneGrid[tunedParams],range) #Y is the min and max values of the tuneGrid
     ) &
     mapply(function(x,y){!x %in% y}, #Logic check for whether tuned params are NOT already at their defined limits
-           as.numeric(xgbfit$bestTune[tunedParams]), #X is the best-tune values of the tuneGrid
+           as.numeric(fit$bestTune[tunedParams]), #X is the best-tune values of the tuneGrid
            lapply(gridSettings[tunedParams],range) #Y is the min and max values allowed in the tuneGrid, as defined in gridSettings
     )
   )){
@@ -104,7 +107,7 @@ recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,
     cat("############\n Commencing retune number: ",nRetunes,"\n")
     
     #Create a retuning grid based on the best tune
-    reTune<- as.list(xgbfit$bestTune)
+    reTune<- as.list(fit$bestTune)
     
     #Indicate tune scale of further stepping for any expansions of the tuned parameters
     #Param info: https://xgboost.readthedocs.io/en/latest/parameter.html.
@@ -113,14 +116,14 @@ recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,
     
     ### Loop across tune params and extend any where the best fit occurred at the edges that are not also parameter limits
     for(i in 1:length(tunescale)){
-      if(xgbfit$bestTune[[tunedParams[i]]]==min(tuneGrid[tunedParams[i]]) && xgbfit$bestTune[[tunedParams[i]]]!=gridSettings[[tunedParams[i]]][["min"]]
+      if(fit$bestTune[[tunedParams[i]]]==min(tuneGrid[tunedParams[i]]) && fit$bestTune[[tunedParams[i]]]!=gridSettings[[tunedParams[i]]][["min"]]
          ){
-        #Try some slightly lower values and ensure this doesnt pass the 0 threshold
-        reTune[[tunedParams[i]]] <- xgbfit$bestTune[[tunedParams[i]]]+seq(-3*tunescale[i],tunescale[i],by=tunescale[i])
-      } else if (xgbfit$bestTune[[tunedParams[i]]]==max(tuneGrid[tunedParams[i]]) && xgbfit$bestTune[[tunedParams[i]]]!=gridSettings[[tunedParams[i]]][["max"]]
+        #Try some slightly lower values
+        reTune[[tunedParams[i]]] <- fit$bestTune[[tunedParams[i]]]+seq(-3*tunescale[i],tunescale[i],by=tunescale[i])
+      } else if (fit$bestTune[[tunedParams[i]]]==max(tuneGrid[tunedParams[i]]) && fit$bestTune[[tunedParams[i]]]!=gridSettings[[tunedParams[i]]][["max"]]
                  ){
         #Try some slightly higher values
-        reTune[[tunedParams[i]]] <- xgbfit$bestTune[[tunedParams[i]]]+seq(-tunescale[i],3*tunescale[i],by=tunescale[i])
+        reTune[[tunedParams[i]]] <- fit$bestTune[[tunedParams[i]]]+seq(-tunescale[i],3*tunescale[i],by=tunescale[i])
       }
     }
     
@@ -156,14 +159,21 @@ recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,
       cat("Holding ncores constant at: ",Reset_cores,"\n")
     }
     
-    #Perform the Retune as necessary
-    xgbfit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,gsub(".Rds",paste0("_retune",nRetunes,"_result.Rds"),outputFile),ncores=Reset_cores)
+    #Perform the retune as necessary
+    fit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,gsub(".Rds",paste0("_retune",nRetunes,"_result.Rds"),outputFile),ncores=Reset_cores)
+    
+    #Save the train object
+    allTrains[[length(allTrains)+1]] <- fit
+    
+    #Combine the grid search performance with the earlier results
+    allResults<- rbind(allResults,
+                       cbind(nLoopedRetunes=nRetunes,fit$results)
+                       )
     
     if(maxloops==nRetunes){ #Force stop if there have been maxloops retunes - arbitrarily set to the default of 5
       warning(nRetunes,"repeat tunes occurred, stopping the loop.\n")
       break
     } 
   }
-  if(writetoFile){sink()}
-  return(list(xgbfit=xgbfit,tuneGrid=tuneGrid))
+  return(list(finalTrain=fit,allTrains=allTrains,allResults=allResults,tuneGrid=tuneGrid))
 }

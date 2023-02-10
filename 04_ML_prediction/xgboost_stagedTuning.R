@@ -27,6 +27,9 @@ option_list = list(
 
 opt = parse_args(OptionParser(option_list=option_list))
 
+cat('Options are:\n')
+print(opt)
+
 ######
 ### Setup
 ######
@@ -44,12 +47,12 @@ if(!is.na(opt$tuningLogFile)){
   tuningLog<- file.path(resultspath,opt$tuningLogFile)
   file.create(tuningLog) #Create the log file
   
-  cat("Writing tuning details to:", tuningLog)
+  cat("Writing tuning details to:", tuningLog,"\n")
 } else{
   tuningLog <- NA
 }
 
-## read in the nrounds tuning function: OptimNrounds
+## read in the nrounds tuning function: tuneNRounds
 source(file.path(opt$scriptDir,"xgb_tuneNRounds_func.R"))
 ## read in the wrapper functions for automated tuning of xgboost in caret
 source(file.path(opt$scriptDir,"recursiveTuning_func.R"))
@@ -82,8 +85,15 @@ ctrl <- trainControl(method = "repeatedcv",
 #Define the summary function according to the number of classes to model [note that only multi-class is implemented downstream]
 if(length(levels(data$C))==2){
   ctrl$summaryFunction <-  twoClassSummary
+  objective <- "binary:logistic"
+  if(opt$tuneFor=="AUC"){
+    opt$tuneFor <- "ROC"
+    cat("Performing two class summary - switching caret 'AUC' objective to 'ROC'.\n")
+  }
+  
 } else {
   ctrl$summaryFunction <-  multiClassSummary
+  objective <- "multi:softprob"
 }
 
 #TUNING PARAMS
@@ -121,10 +131,13 @@ tuneGrid <- data.frame(
   nrounds=100
 )
 
+#Extract resampled crossfolds externally using fixed seed for replicability
+set.seed(24920)
+initResamps <- createMultiFolds(data$C, k = 10,times=10)
 #Run xgb.cv and then set the initial number of nrounds
 tryCatch({
   if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
-  initNroundTune<- tuneNRounds(data,rowwiseWeights,tuneGrid,eta=0.3,nrounds=1000,early_stopping_rounds=50,k=10,times=10)
+  initNroundTune<- tuneNRounds(data,rowwiseWeights,tuneGrid,eta=0.3,nrounds=1000,early_stopping_rounds=50,index=initResamps,objective=objective)#k=10,times=10)
   if(!is.na(tuningLog)){sink()}
   
   #Save the tune result
@@ -157,9 +170,15 @@ tuneGrid <- expand.grid(
 #Define the output file
 outputFile<- file.path(resultspath,gsub("_dataset.Rds","_XGBtune1_result.Rds",basename(opt$rdsDataset)))
 
+#Set a consistent resampling index across retunes #Using fixed seed for replicability
+set.seed(302340)
+ctrl$index <- createMultiFolds(data$C, k = 10,times=10)
+
 #run recursive tuning
-recursiveFit1 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE,logToFile=tuningLog)
-xgbfit <- recursiveFit1$xgbfit
+if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
+recursiveFit1 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE)
+if(!is.na(tuningLog)){sink()}
+xgbfit <- recursiveFit1$finalTrain
 
 ######
 ### Perform 2nd tuning step, tuning subsample and colsample_bytree
@@ -173,12 +192,16 @@ tuneGrid <- expand.grid(tuneGrid)
 #Update the output file name declaring this as the 2nd tuning stage
 outputFile<- file.path(resultspath,gsub("_dataset.Rds","_XGBtune2_result.Rds",basename(opt$rdsDataset)))
 
-#run recursive tuning
-recursiveFit2 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE,logToFile=tuningLog)
-xgbfit <- recursiveFit2$xgbfit
 
-#Save everything into an Rdata file as backup
-save.image(file.path(dirname(outputFile),"postStage2Tune.Rdata"))
+#Update to a new resampling index across retunes
+set.seed(436089)
+ctrl$index <- createMultiFolds(data$C, k = 10,times=10)
+
+#run recursive tuning
+if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
+recursiveFit2 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE)
+if(!is.na(tuningLog)){sink()}
+xgbfit <- recursiveFit2$finalTrain
 
 ######
 ### Perform 3rd tuning step, tuning eta and nrounds across 2 stages
@@ -188,11 +211,15 @@ save.image(file.path(dirname(outputFile),"postStage2Tune.Rdata"))
 #Extract the best previous tune
 tuneGrid<- xgbfit$bestTune
 
+#Update to new resampling seed, which will be used in both stages of the paired nrounds/eta tuning
+set.seed(897897)
+ctrl$index <- createMultiFolds(data$C, k = 10,times=10)
+
 ### Stage 1, using xgb.cv early-stopping functionality determine starting points for a series of values for eta and nrounds
 tryEtas<- c(0.01,seq(0.02,0.3,by=0.02))
 names(tryEtas) <-  paste0("eta",tryEtas)
 if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
-  tuneEta<- lapply(tryEtas,tuneNRounds,data=data,rowwiseWeights=rowwiseWeights,tuneGrid=tuneGrid,nrounds=1000,early_stopping_rounds=50,k=10,times=10)
+  tuneEta<- lapply(tryEtas,tuneNRounds,data=data,rowwiseWeights=rowwiseWeights,tuneGrid=tuneGrid,nrounds=1000,early_stopping_rounds=50,index=ctrl$index,objective=objective)#k=10,times=10)
 if(!is.na(tuningLog)){sink()}
 
 ### Stage 2, using caret, and the xgb.cv-primed partial grid search, tune and optimise
@@ -204,18 +231,87 @@ tuneGrid$nrounds <- ceiling(sapply(tuneEta, function(x)summary(x$stopRows$iter)[
 outputFile<- file.path(resultspath,gsub("_dataset.Rds","_XGBtune3_result.Rds",basename(opt$rdsDataset)))
 
 #Run non-recursive tuning
-#recursiveFit3 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE,maxloops=10,logToFile=tuningLog)
+#recursiveFit3 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE,maxloops=10)
 if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
   Fit3<- wrapTrain(data, opt, tuneGrid, ctrl, rowwiseWeights, outputFile, ncores = opt$ncores)
 if(!is.na(tuningLog)){sink()}
-
-xgbfit <- Fit3$xgbfit
-
-# Notes:
-### Alternatively, nrounds could be recursively tuned by caret inside a loop for each eta [maybe this is unnecessarily complex].
+xgbfit <- Fit3
 
 #Save everything into an Rdata file as backup
 save.image(file.path(dirname(outputFile),"postStage3Tune.Rdata"))
+
+
+# # #### testing
+#   outputFile <- "~/Downloads/sandbox.Rds"
+# tuneGrid$colsample_bytree <- tuneGrid$subsample <- seq(0.8,1,by=0.1)
+# tuneGrid <- expand.grid(tuneGrid)
+
+#Extract the final model and save to file for post-processing
+outputFile <- file.path(resultspath,"XGBfinalTune.Rds")
+saveRDS(xgbfit,outputFile)
+
+
+## Generate a comprehensive grid search summary and save to file
+## Notes:
+# cross-validation folds were resampled for each of search 1, 2, and 3
+# search 3 is a partial search paired eta and nrounds, therefore has had 0 retunes in the recursive tuning function
+# Pseudorandomisation will cause small discrepancies across recursive retunes
+allXGBfits<- rbind(cbind(SearchStage=1,recursiveFit1$allResults),
+                   cbind(SearchStage=2,recursiveFit2$allResults),
+                   cbind(SearchStage=3,nLoopedRetunes=0,Fit3$results)
+                   )
+
+tuneOutpath<- gsub(".Rds$","",outputFile)
+if(!dir.exists(tuneOutpath)){dir.create(tuneOutpath)}
+
+write.table(x=allXGBfits,file=file.path(tuneOutpath,"AllTunes.tsv"),sep="\t",row.names = FALSE)
+
+## Save best param config determined across staged retunes to distinct file, including the best performance measure
+bestTune<- left_join(xgbfit$bestTune,xgbfit$results)[c(names(xgbfit$bestTune),opt$tuneFor)]
+write.table(x=bestTune,file=file.path(tuneOutpath,"BestTune.tsv"),sep="\t",row.names = FALSE)
+
+
+
+
+## Run the summary extraction script on final model
+system(paste("Rscript",file.path(opt$scriptDir,"ML_extract.R"),
+              "--finalTune",outputFile,
+              "--tuneFor",opt$tuneFor,
+              "--scriptDir",opt$scriptDir))
+
+
+# #####
+# # Visualise performance across tunes in the staged grid search
+# # Not run and not fully implemented; retained for reference.
+# #####
+# viewTunes <- list()
+# 
+# plotRoot<- ggplot()+
+#   theme_bw()+
+#   theme(axis.text.x = element_text(angle=90))
+# 
+# #First stage tunes gamma, max_depth, and min_child_weight by recursive grid search
+# viewTunes$Tune1<- plotRoot+
+#   geom_line(data=recursiveFit1$allResults,aes(x=gamma,y=!!sym(opt$tuneFor),color=as.factor(nLoopedRetunes)))+
+#   facet_grid(rows=vars(max_depth),cols=vars(min_child_weight))+
+#   labs(caption="Facet rows = max_depth, cols = min_child weight, colour is recursive grid search loops")+
+#   scale_colour_discrete(guide="none")
+# 
+# #Second stage tunes colsample_bytree and subsample by recursive grid search
+# viewTunes$Tune2<- plotRoot+
+#   geom_line(data=recursiveFit2$allResults,aes(x=colsample_bytree,y=!!sym(opt$tuneFor),color=as.factor(nLoopedRetunes)))+
+#   facet_wrap(~subsample)+
+#   labs(caption="Facets represent subsamples, and colour is recursive grid search loops")+
+#   scale_colour_discrete(guide="none")
+# 
+# #Third stage involves paired tuning of eta and nrounds
+# mutFit3<- Fit3$results %>%
+#   mutate(pairedTune=paste0(eta," (",nrounds,")"))
+# 
+# viewTunes$Tune3 <- plotRoot+
+#   geom_line(data=mutFit3,aes(x=pairedTune,y=!!sym(opt$tuneFor),group=1))+
+#   labs(x="eta (nrounds)")
+
 
 ##Information
 end.time <- Sys.time()

@@ -35,10 +35,13 @@
 #eta - the learning rate at which to optimise nrounds; if not specified, the function expects this in the tuneGrid
 #nrounds - max number of rounds to try; this is intentionally high by default to encourage early stopping
 #early_stopping_rounds - as in xgboost; declare the number of rounds in watchlist dataset without improvement before halting process. If NULL then early stopping will be disabled
-#k - as in caret trainControl; number of cross-validation folds
-#times - as in caret trainControl; number of repeated cross validations to apply
+#k - as in caret trainControl; number of cross-validation folds. Ignored if index is supplied
+#times - as in caret trainControl; number of repeated cross validations to apply. Ignored if index is supplied
+#index - as in caret trainControl; supply a list of elements to be used for each resampling iteration - note that gsub and regexp determines how many resampling loops to run based on unique values after: gsub("Fold[0-9]+\\.","",names(index))
+#objective - string passed to objective parameter of xgb.cv; defaults to 'multi:softprob', for multi-class classification objectives. Set 'binary:logistic' for binary classifications
+#eval_metric - string passed to eval_metric parameter; defaults to 'auc'.
 #incPlot - defaults to FALSE, but set TRUE to return a ggplot of the performance in cross-validated test and train samples across resamples and number of rounds [included as an option and FALSE by default to make ggplot dependency optional]
-tuneNRounds <- function(data,rowwiseWeights,tuneGrid,eta=NA,nrounds=1000,early_stopping_rounds=50,k=10,times=10,incPlot=FALSE){
+tuneNRounds <- function(data,rowwiseWeights,tuneGrid,eta=NA,nrounds=1000,early_stopping_rounds=50,k=10,times=10,index=NULL,objective="multi:softprob",eval_metric="auc",incPlot=FALSE){
   
   cat("---------\n")
   if(nrow(tuneGrid)>1){
@@ -51,13 +54,20 @@ tuneNRounds <- function(data,rowwiseWeights,tuneGrid,eta=NA,nrounds=1000,early_s
     tuneGrid$eta <- eta
   }
   
-  cat("Determining the optimum nrounds for learning rate (eta): ", eta,".\nUsing ",k,"-fold cross-validation with ",times," repeated samples.",sep="")
-  
   #Always set Nrounds according to the value passed to the Nrounds argument
   tuneGrid$nrounds <- nrounds
-  
-  #Create repeated cross-validation folds as in caret; the function aims to preserve class balance in the folds
-  folds <- createMultiFolds(data$C, k = k,times=times)
+  cat("Determining the optimum nrounds for learning rate (eta): ", eta,".\n")
+  if(is.null(index)){
+    cat("Using ",k,"-fold cross-validation with ",times," repeated samples.\n",sep="")
+    #Create repeated cross-validation folds as in caret; the function aims to preserve class balance in the folds
+    folds <- createMultiFolds(data$C, k = k,times=times)
+  } else if("list" %in% class(index) && !is.null(names(index))) {
+    cat("Using predefined cross-validation resample index.\n")
+    #Supply cross validation folds externally
+    folds <- index 
+  } else {
+    stop("The index argument expects a named list of integers e.g. as generated via caret's createMultiFolds function")
+  }
   
   #Invert the folds to identify the test data
   testFolds<-lapply(folds,function(x,y) y[!y %in% x],1:nrow(data))
@@ -65,10 +75,14 @@ tuneNRounds <- function(data,rowwiseWeights,tuneGrid,eta=NA,nrounds=1000,early_s
   
   #Generate a parameter list for direct XGBoost tuning
   params<- c(tuneGrid[names(tuneGrid)!="nrounds"],
-             objective = "multi:softprob",
-             eval_metric = "auc",
-             num_class=length(levels(data$C)),
+             objective = objective,
+             eval_metric = eval_metric,
              nthread=1)
+  
+  #For multiclass summaries, specify numclasses - specifying this for binary objective crashes
+  if(class(data$C)=="factor" && length(levels(data$C))>2){
+    params <-c(params,num_class=length(levels(data$C)))
+  }
   
   #Internal function for formatting datasets, distinguishing the clusters 'C' from the predictors, and assigning weights
   formatData<- function(x,weights){
@@ -82,7 +96,7 @@ tuneNRounds <- function(data,rowwiseWeights,tuneGrid,eta=NA,nrounds=1000,early_s
   
   #Loop across resamples and apply xgb.cv across folds
   resamples<-unique(gsub("Fold[0-9]+\\.","",names(testFolds)))
-  resampXGB_CV<-vector(mode="list",length=times)
+  resampXGB_CV<-vector(mode="list",length=length(resamples))
   names(resampXGB_CV) <- resamples
   for(i in 1:length(resamples)){
     tFlds<- testFolds[grep(resamples[i],names(testFolds))]
@@ -140,7 +154,7 @@ tuneNRounds <- function(data,rowwiseWeights,tuneGrid,eta=NA,nrounds=1000,early_s
     
     
   } else {
-    nroundPlot <- "Set the incPlot=TRUE to return a ggplot summarising performance across nrounds"
+    nroundPlot <- "Set incPlot=TRUE to return a ggplot summarising performance across nrounds"
   }
   
   #Return details of the tuning results
