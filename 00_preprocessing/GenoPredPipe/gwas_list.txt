@@ -1,0 +1,6 @@
+name path population sampling prevalence mean sd label
+ALScc /scratch/users/k1802739/ldsc/ALS_2022/full_sumstat/ALS_GWAS_2021_s6_excluded.txt.gz EUR 0.5 0.0029 NA NA "ALS case control"
+FTDposMatch /users/k1802739/SUMSTATS_LCA/FTD/FTD_GWAS_META.GPPmatch.gz EUR 0.5 0.0013 NA NA "Frontotemporal dementia"
+SZposMatch /users/k1802739/SUMSTATS_LCA/SZ/SZ_sumstats_PGC.GPPmatch.gz EUR 0.5 0.004 NA NA "Schizophrenia"
+PDposMatch /users/k1802739/SUMSTATS_LCA/PD/PD_sumstats_Nalls.GPPmatch.gz EUR 0.5 0.027 NA NA "Parkinsons disease"
+AZposMatch /users/k1802739/SUMSTATS_LCA/AD/AD_sumstats_Kunkle.GPPmatch.gz EUR 0.5 0.05 NA NA "Alzheimer's Disease"

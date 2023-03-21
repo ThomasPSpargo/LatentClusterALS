@@ -15,8 +15,8 @@ option_list = list(
               help="Specify the source dataset for which a model will be derived"),
   make_option("--tuneFor", action="store", default=NA, type='character',
               help="Specify the parameter to tune for. Passed to job script"),
-  make_option("--assignPrefix", action="store", default="", type='character',
-              help="Defines a prefix for the current job; useful if trying different tuning parameters"),
+  make_option("--assignSuffix", action="store", default="", type='character',
+              help="Defines a suffix for the current job; useful if trying different tuning parameters"),
    make_option("--scriptDir", action="store", default=NA, type='character',
                help="Define path to the R script detailing how to process XGBoost fits"),
   make_option("--ncores", action="store", default=30, type='numeric',
@@ -35,7 +35,7 @@ print(opt)
 ######
 
 #Obtain directory tree minus model name. This is where output files will be saved
-path <- file.path(gsub("_dataset.Rds$","",opt$rdsDataset),paste0("XGBoost_",opt$tuneFor,opt$assignPrefix))
+path <- file.path(gsub("_dataset.Rds$","",opt$rdsDataset),paste0("XGBoost_",opt$tuneFor,opt$assignSuffix))
 if(!dir.exists(path)){dir.create(path,recursive = TRUE)}
 
 #Directory for the results files
@@ -141,7 +141,7 @@ tryCatch({
   if(!is.na(tuningLog)){sink()}
   
   #Save the tune result
-  saveRDS(initNroundTune, file = file.path(resultspath,"initialNroundTune.Rds"))
+  #saveRDS(initNroundTune, file = file.path(resultspath,"initialNroundTune.Rds"))
   
   #Extract the 3rd quartile for best cutpoint across resamples [3rd quartile selected since this should be close enough to the optimum across resamples]
   setinitNrounds<- ceiling(summary(initNroundTune$stopRows$iter)[["3rd Qu."]])
@@ -167,16 +167,13 @@ tuneGrid <- expand.grid(
   nrounds=setinitNrounds
 )
 
-#Define the output file
-outputFile<- file.path(resultspath,gsub("_dataset.Rds","_XGBtune1_result.Rds",basename(opt$rdsDataset)))
-
 #Set a consistent resampling index across retunes #Using fixed seed for replicability
 set.seed(302340)
 ctrl$index <- createMultiFolds(data$C, k = 10,times=10)
 
 #run recursive tuning
 if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
-recursiveFit1 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE)
+recursiveFit1 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE)
 if(!is.na(tuningLog)){sink()}
 xgbfit <- recursiveFit1$finalTrain
 
@@ -189,9 +186,6 @@ tuneGrid<- as.list(xgbfit$bestTune)
 tuneGrid$colsample_bytree <- tuneGrid$subsample <- seq(0.6,1,by=0.05)
 tuneGrid <- expand.grid(tuneGrid)
 
-#Update the output file name declaring this as the 2nd tuning stage
-outputFile<- file.path(resultspath,gsub("_dataset.Rds","_XGBtune2_result.Rds",basename(opt$rdsDataset)))
-
 
 #Update to a new resampling index across retunes
 set.seed(436089)
@@ -199,7 +193,7 @@ ctrl$index <- createMultiFolds(data$C, k = 10,times=10)
 
 #run recursive tuning
 if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
-recursiveFit2 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE)
+recursiveFit2 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE)
 if(!is.na(tuningLog)){sink()}
 xgbfit <- recursiveFit2$finalTrain
 
@@ -227,24 +221,13 @@ tuneGrid<- xgbfit$bestTune[rep(1,each=length(tryEtas)),]
 tuneGrid$eta <- tryEtas
 tuneGrid$nrounds <- ceiling(sapply(tuneEta, function(x)summary(x$stopRows$iter)[["Median"]]))
 
-#Update the output file template declaring this is the 3nd tuning stage
-outputFile<- file.path(resultspath,gsub("_dataset.Rds","_XGBtune3_result.Rds",basename(opt$rdsDataset)))
 
 #Run non-recursive tuning
-#recursiveFit3 <- recursiveWrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=opt$ncores,gridSettings=gridSettings,updateNcores=TRUE,maxloops=10)
 if(!is.na(tuningLog)){sink(tuningLog,append = TRUE)}
-  Fit3<- wrapTrain(data, opt, tuneGrid, ctrl, rowwiseWeights, outputFile, ncores = opt$ncores)
+  Fit3<- wrapTrain(data, opt, tuneGrid, ctrl, rowwiseWeights, ncores = opt$ncores)
 if(!is.na(tuningLog)){sink()}
 xgbfit <- Fit3
 
-#Save everything into an Rdata file as backup
-save.image(file.path(dirname(outputFile),"postStage3Tune.Rdata"))
-
-
-# # #### testing
-#   outputFile <- "~/Downloads/sandbox.Rds"
-# tuneGrid$colsample_bytree <- tuneGrid$subsample <- seq(0.8,1,by=0.1)
-# tuneGrid <- expand.grid(tuneGrid)
 
 #Extract the final model and save to file for post-processing
 outputFile <- file.path(resultspath,"XGBfinalTune.Rds")

@@ -12,7 +12,7 @@
 #wrapTrain is a wrapper for caret's train function [implemented currently for xgbTree only]
 #recursiveWrapTrain is a wrapper for wrapTrain which uses a while loop to automate tuned parameter optimisation if occurring at grid search edges
 
-wrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=1){
+wrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,ncores=1){
   
   #Return an info message describing the grid search parameters which are being tuned and held constant
   gridSize<- sapply(tuneGrid,function(x)length(unique(x)))
@@ -59,24 +59,18 @@ wrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=1)
   time.taken <- end.time - start.time
   cat('Time taken for tuning was ',as.character(round(time.taken,2)),attr(time.taken, 'units'),'\n------------\n')
   
-  #Save all important parameters to be passed onwards
-  savelist <- list(fit=fit,ctrl=ctrl,tuneFor=opt$tuneFor,rowwiseWeights=rowwiseWeights,tuneGrid=tuneGrid)
-  
-  #Save fit and parameters to file
-  saveRDS(savelist, file = outputFile)
-  
   return(fit)
 }
 
 
 #### Recursive wrapping of wrapTrain to permit automatic retuning at edges
-recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=1,gridSettings,updateNcores=TRUE,maxloops=5){
+recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,ncores=1,gridSettings,updateNcores=TRUE,maxloops=5){
   
   #Store all caret train objects in a list
   allTrains <- list()
   
   #Perform the first tune
-  fit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,ncores=ncores)
+  fit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,ncores=ncores)
   
   #Save to list
   allTrains[[1]] <- fit
@@ -160,7 +154,7 @@ recursiveWrapTrain <- function(data,opt,tuneGrid,ctrl,rowwiseWeights,outputFile,
     }
     
     #Perform the retune as necessary
-    fit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,gsub(".Rds",paste0("_retune",nRetunes,"_result.Rds"),outputFile),ncores=Reset_cores)
+    fit <- wrapTrain(data,opt,tuneGrid,ctrl,rowwiseWeights,ncores=Reset_cores)
     
     #Save the train object
     allTrains[[length(allTrains)+1]] <- fit

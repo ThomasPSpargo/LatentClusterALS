@@ -12,7 +12,7 @@ option_list = list(
               help="Specify the source dataset for which a model will be derived"),
   make_option("--tuneFor", action="store", default=NA, type='character',
               help="Specify the parameter to tune for. Passed to job script"),
-  make_option("--assignPrefix", action="store", default="", type='character',
+  make_option("--assignSuffix", action="store", default="", type='character',
               help="Defines a prefix for the current job; useful if trying different tuning parameters"),
   make_option("--ncores", action="store", default=10, type='numeric',
               help="Indicate the number of cores that are available for use"),
@@ -22,7 +22,6 @@ option_list = list(
 
 opt = parse_args(OptionParser(option_list=option_list))
 
-# opt <- list(rdsDataset="/Users/tom/Downloads/Dec1stmodels/MLprediction/data_pheno_dataset.Rds",tuneFor="AUC",assignPrefix="test")
 cat('Options are:\n')
 print(opt)
 
@@ -31,7 +30,7 @@ print(opt)
 ######
 
 #Obtain directory tree minus model name. This is where output files will be saved
-path <- file.path(gsub("_dataset.Rds$","",opt$rdsDataset),paste0("RF_",opt$tuneFor,opt$assignPrefix))
+path <- file.path(gsub("_dataset.Rds$","",opt$rdsDataset),paste0("RF_",opt$tuneFor,opt$assignSuffix))
 if(!dir.exists(path)){dir.create(path,recursive = TRUE)}
 
 ######

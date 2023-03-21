@@ -119,7 +119,7 @@ if(isMulticlass){
     labs(x="Specificity",y="Sensitivity")
   
   #Save the overall performance for one vs rest and total for all one-vs-rest
- write.table(x=aveROC$gridROC,file=file.path(path,paste0("roc_auc.tsv")),sep="\t",row.names = FALSE)
+ write.table(x=aveROC$AverageAUC,file=file.path(path,paste0("roc_auc.tsv")),sep="\t",row.names = FALSE)
   
 } else {
   
@@ -249,8 +249,8 @@ recodes=c("Time_to_death_or_last_followup_years"="Disease duration",
 "ALScc_SBayesR" = "ALS PRS",
 "FTDcc_SBayesR" = "FTD PRS",
 "SZcc_SBayesR" = "Schizophrenia PRS",
-"PDcc_SBayesR" = "Parkinson's Disease PRS",
-"AZcc_SBayesR" = "Alzheimer's Disease PRS",
+"PDcc_SBayesR" = "Parkinson's disease PRS",
+"AZcc_SBayesR" = "Alzheimer's disease PRS",
 "AutoProt" = "Autophagy & proteostasis",
 "CytoTransp" = "Cyt. Dynam. & Ax. Transp.",
 "RNAFunc" = "RNA function")

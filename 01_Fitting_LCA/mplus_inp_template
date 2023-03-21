@@ -1,0 +1,31 @@
+[[init]]
+iterators = classes sample;
+classes = 1:9;
+sample = 1:9;
+
+sampleName#sample = PM_FULL_ANY JNT_FULL_ANY STR_NOPM_ANY PM_FULL_DDOMIT JNT_FULL_DDOMIT STR_NOPM_DDOMIT PM_FULL_NAOMIT JNT_FULL_NAOMIT STR_NOPM_NAOMIT;
+
+filename = "[[sampleName#sample]]_c[[classes]].inp";
+
+outputDirectory = "/scratch/users/k1802739/ALS_LCA/FinalModels/[[sampleName#sample]]";
+
+[[/init]]
+
+TITLE: [[sampleName#sample]]_LCA_c[[classes]]
+DATA:
+FILE IS "/scratch/users/k1802739/ALS_LCA/final_datasets/mplusfiles/[[sampleName#sample]].csv";
+VARIABLE:
+NAMES ARE ID PHENO SEX AGEONS CTYDEL SRV SRVBIN SITBIN;
+USEVARIABLES ARE ID PHENO SEX AGEONS CTYDEL SITBIN SRV SRVBIN;
+MISSING=.;
+IDVARIABLE IS ID;
+NOMINAL = PHENO;
+CATEGORICAL = SEX SITBIN;
+SURVIVAL = SRV;
+TIMECENSORED = SRVBIN (1 = NOT 0 = RIGHT);
+
+CLASSES = c ([[classes]]);	
+ANALYSIS: TYPE = MIXTURE;
+PROCESSORS = 8;
+STARTS = 200 50; 
+STSCALE = 5;

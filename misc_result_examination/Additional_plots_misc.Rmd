@@ -1,0 +1,723 @@
+# Miscellanious plot generation for manuscript
+
+NOTE: This began as a .R document before converting to .Rmd for greater readability and easier code segmentation across chunks
+
+
+```{r SETUP chunk}
+
+#Declare plot-friendly names for variables included in analyses
+recodes=c("Time_to_death_or_last_followup_years"="Disease duration",
+"Age_at_onset_years"="Age of onset",
+"CTYDEL"="Diagnostic delay",
+"Sex_at_birth" = "Sex",
+"Site_of_Onset" = "Site of onset",
+"Phenotype_1" = "Clinical diagnosis (ALS)",
+"Phenotype_2" = "Clinical diagnosis (PLS)",
+"Phenotype_3" = "Clinical diagnosis (PMA)",
+"c9_status" = "C9orf72 expansion",
+"ALScc_SBayesR" = "ALS PRS",
+"FTDcc_SBayesR" = "FTD PRS",
+"SZcc_SBayesR" = "Schizophrenia PRS",
+"PDcc_SBayesR" = "Parkinson's disease PRS",
+"AZcc_SBayesR" = "Alzheimer's disease PRS",
+"AutoProt" = "Autophagy & proteostasis",
+"CytoTransp" = "Cyt. Dynam. & Ax. Transp.",
+"RNAFunc" = "RNA function")
+
+```
+
+### Generate upset plots for missingness
+
+```{r Missingness plots}
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(optparse)
+library(naniar)
+data <- fread("/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/JNT_JanFinal_savedata_C5/completesample/saved_mplusfit.tsv")
+
+#Flag the originating cohort for each sample - in the 'new_num_id' column, all project mine samples begin with 999 and all strength samples begin with 555.
+data <- data %>%
+  mutate(cohort=case_when(grepl("^999",new_num_id) ~ "Project MinE",
+                          grepl("^555",new_num_id) ~ "STRENGTH",
+                          TRUE ~ NA_character_
+                          ))
+
+#Extract N's per country and by 
+#table(data$origin,data$cohort)
+
+### Extract missingness profiles
+miss_data<- data %>%
+  dplyr::select(cohort,Time_to_death_or_last_followup_years,Age_at_onset_years,Diagnostic_delay_years,Sex_at_birth,Site_of_Onset,Phenotype) %>%
+  rename(`Disease Duration`=Time_to_death_or_last_followup_years,
+         `Age of onset`=Age_at_onset_years,
+         `Diagnostic delay`=Diagnostic_delay_years,
+         `Sex`=Sex_at_birth,
+         `Site of onset`=Site_of_Onset,
+         `Clinical diagnosis`=Phenotype)
+
+PM_missplot<- miss_data %>%
+  dplyr::filter(cohort=="Project MinE") %>%
+  naniar::gg_miss_upset(.)
+
+STR_missplot<- miss_data %>%
+  dplyr::filter(cohort=="STRENGTH") %>%
+  naniar::gg_miss_upset(.)
+
+#Save in 100 x 160mm files
+pdf("~/Downloads/upsetplotPM.pdf",height=3.94,width=6.3)
+PM_missplot
+dev.off()
+
+pdf("~/Downloads/upsetplotSTR.pdf",height=3.94,width=6.3)
+STR_missplot
+dev.off()
+
+```
+
+
+### Generate the 3-panel roc plot
+
+```{r}
+
+singleROCS <- list(clinicalOnlyimp=readRDS("/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/Figures/sourcedata/ROC_curves/OnePanel_roc_Pheno.Rds"),
+                   withrarendPRS=readRDS("/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/Figures/sourcedata/ROC_curves/OnePanel_roc_Genetic.Rds"),
+                   restrictedClinical=readRDS("/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/Figures/sourcedata/ROC_curves/OnePanel_roc_filtered.Rds"))
+
+singleROCS <- lapply(singleROCS,function(x){x+
+    guides(color=guide_legend(ncol=1, byrow=TRUE))+
+    theme(legend.position = c(0.775,0.3),# "bottom",
+           legend.background = element_rect(fill = "white", color = "black"),
+           legend.text = element_text(size=8),
+           legend.title = element_text(size=10),
+         legend.key.height = unit(0.2, 'cm'),
+           legend.key.width = unit(0.5, 'cm')
+     )
+})
+
+
+library(cowplot)
+combineRocs <- plot_grid(plotlist = singleROCS,
+                         labels = "AUTO",
+                         label_size = 8,
+                         label_x = 0, label_y = 1,
+                         nrow=1)
+
+path <- "~/Downloads"
+ggsave(plot=combineRocs,
+       filename = file.path(path,paste0("threepanelROCs.pdf")),
+       units="mm",width=230,height=70)
+
+```
+
+### Grid-based ROC plot
+
+THis section is a work in progress
+
+```{r}
+#Load helper functions for ROC curve generation
+source("https://raw.githubusercontent.com/ThomasPSpargo/LatentClusterALS/master/04_ML_prediction/roc_func.R")
+
+#Import the xgboost and random forest models in pairs per dataset
+ML_grid_pairs<- list(
+  ## Clinical all
+  clinALL=list(XGB="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/MLprediction/data_pheno/XGBoost_AUC_maybeFinal/results/XGBfinalTune.Rds",
+               RF="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/MLprediction/data_pheno/RF_AUC_maybeFinal/RFfinalTune.Rds"),
+  
+  #Genetic models
+  genetic=list(XGB="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/MLprediction/data_rarepathways_allPRS/XGBoost_AUC_maybeFinal/results/XGBfinalTune.Rds",
+                RF="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/MLprediction/data_rarepathways_allPRS/RF_AUC_maybeFinal/RFfinalTune.Rds"),
+   
+  #Genetic dataset matched clinical models
+  clinMatch=list(XGB="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/MLprediction/phenofilter_rarepathways_allPRS/XGBoost_AUC_maybeFinal/results/XGBfinalTune.Rds",
+                 RF="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/MLprediction/phenofilter_rarepathways_allPRS/RF_AUC_maybeFinal/RFfinalTune.Rds")
+)
+library(tidyverse)
+library(pROC)
+
+#Loop across datasets and generate grid ROC curves
+panelplots<- lapply(ML_grid_pairs,function(x){
+  
+  ## Read in the RF and XGBoost models
+  XGBtune<- readRDS(x[[1]]); XGBtune <- XGBtune$pred
+  RFtune <- readRDS(x[[2]]); RFtune <- RFtune$pred
+  
+  #Set a named vector for labelling facets
+  labels= setNames(gsub("X","Class ",levels(XGBtune$obs)), levels(XGBtune$obs)) # create named vector
+  
+  #Supply a list of predictions (one from xgboost and one from RF) for the given dataset
+  finalPred=list("xgboost"=XGBtune,"randomForest"=RFtune)
+  
+  #Run GridROC
+  gridCompare<- gridROC(finalPred,labels=labels,plotAUCvals=FALSE)
+  
+  #Set aesthetics, manually position auc values based on RF and xgboost, and return the plot
+  gridAUCplot<- gridCompare$gridROC+
+  scale_color_manual(values=c("randomForest"="olivedrab","xgboost"="royalblue"),
+                     labels=c("Random forest","eXtreme Gradient Boosting"),name="Algorithm")+
+  theme(legend.position = "top")+
+    geom_text(data = gridCompare$allAUCs[gridCompare$allAUCs$group=="randomForest",],
+              aes(x=0.25,y=0.1,label=signif(AUC,3),colour=group),
+              show.legend = FALSE)+
+    geom_text(data = gridCompare$allAUCs[gridCompare$allAUCs$group=="xgboost",],
+              aes(x=0.25,y=0.3,label=signif(AUC,3),colour=group),
+              show.legend = FALSE)
+  
+  return(gridAUCplot)
+  
+})
+#panelplots
+
+
+#Save figs
+path <- "~/Downloads"
+for(i in seq_along(panelplots)){
+  ggsave(plot=panelplots[[i]],
+          filename = file.path(path,paste0("GridRoc_",names(ML_grid_pairs)[i],".pdf")),
+          units="mm",width=160,height=160)
+}
+
+```
+
+
+### SHAP VALUES
+
+Plot absolute mean SHAP values for RF and xgboost algorithms faceted by dataset / algorithm configuration
+
+```{r SHAP}
+library(tidyverse)
+
+######
+### Chunk setup
+######
+#Function to get abs. mean shap. Declared as such for mapply circumstance when predicting multiclass probabilities
+getMeanSHAP <- function(x,num=1,name){
+  x %>%
+    as.data.frame() %>%
+    summarise(across(everything(),~mean(abs(.)))) %>%
+    pivot_longer(cols=everything(),names_to = "Feature") %>%
+    mutate(class=num,
+           Model=gsub(".*(randomForest|xgb.Booster).*","\\1",name),
+           type=if_else(grepl("class12",name),"binary","multiclass"),
+           data_config=case_when(grepl("filter",name) ~"Clinical [matched]",
+                                 grepl("_pheno",name) ~ "Clinical [full]",
+                                 TRUE ~ "Clinical and genetic"
+                                 
+           )
+    ) 
+}
+
+######
+### RUN
+######
+
+shappath<- list.files("/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/MLprediction/weightedShapley",full.names = TRUE)
+shapFits<- lapply(shappath,readRDS)
+names(shapFits)<-basename(shappath)
+
+#Across each fit, identifying the model by characteristics/names, determine mean shap values
+meanShaps <- mapply(function(x,name){
+
+  if("list" %in% class(x$S) && length(x$S)>2){ #For multiclass summaries, mapply across each list element and class number
+    
+    shapJ <- mapply(getMeanSHAP,x$S,
+                    num=paste0("Class ",1:length(x$S)),
+                    name=name,
+                    SIMPLIFY = FALSE)
+    meanShaps <- do.call(rbind,shapJ)
+  } else { #For binary summaries apply function once  [note that binary objectives return list class with identical values in opposing directions according to the 'positive' class]
+    if("list" %in% class(x$S)){ #
+      ShapMatrix <- x$S[[1]]
+    } else {
+      ShapMatrix <- x$S
+    }
+    meanShaps <- getMeanSHAP(ShapMatrix,num="Binary",name=name)
+  }
+  return(meanShaps)
+},shapFits,names(shapFits),
+SIMPLIFY = FALSE)
+
+plotdata<- do.call(rbind,meanShaps)
+
+#Declare conditions for ordering the features in the resulting figure
+refgroup<-plotdata$class=="Binary" &
+  plotdata$Model=="xgb.Booster" &
+  plotdata$type=="binary" &
+  plotdata$data_config == "Clinical and genetic"
+
+### Generate plot data
+shapBars_data<- plotdata %>%
+  mutate(Feature=recode(Feature,!!!recodes), 
+         class = relevel(as.factor(class),ref="Binary"),
+         Feature = factor(Feature,levels=Feature[refgroup][order(value[refgroup])])
+  )
+
+shapBars <- ggplot(shapBars_data,aes(x = value, y = Feature,fill=Model))+
+  facet_grid(cols=vars(class),rows=vars(data_config),scales="free_y",space="free_y")+
+  geom_col(position=position_dodge())+
+  theme_bw()+
+  labs(x = "SHAP value (absolute mean)",y = "Feature")+
+  scale_fill_manual(values=c("randomForest"="olivedrab","xgb.Booster"="royalblue"),
+                    labels=c("Random\nforest","eXtreme\nGradient\nBoosting"),name="Algorithm")+
+  theme(legend.position = "right")
+  
+
+#Save fig
+path <- "~/Downloads"
+ggsave(plot=shapBars,
+       filename = file.path(path,paste0("shapImportance.pdf")),
+       units="mm",width=250,height=140)
+
+```
+
+### Beeswarm for shapley
+
+This chunk generates beeswarm plots for shap values in order to not simplify only to the average mean. However the plots are quite difficult to condense because of the number of models and are not readily interpretable. Retained in this script for completeness
+
+
+```{r}
+library(ggbeeswarm)
+
+######
+### Chunk setup
+######
+
+#Function for minmax scaling of features
+minmax <- function(x, na.rm = TRUE){
+    (x-min(x))/(max(x)-min(x))
+}
+
+#Function to prepare the SHAP values
+pivotSHAP <- function(piv,num=1,values_to="value",name,scale=FALSE){
+  if(scale){piv<- apply(piv,2,minmax)} #If scaling, minmax across columns
+  piv %>%
+    as.data.frame() %>%  
+    pivot_longer(cols=everything(),names_to = "Feature",values_to = values_to) %>%
+    mutate(ID=row_number(), #For joining between datasets
+           class=num,
+           Model=gsub(".*(randomForest|xgb.Booster).*","\\1",name),
+           type=if_else(grepl("class12",name),"binary","multiclass"),
+           data_config=case_when(grepl("filter",name) ~"Clinical [matched]",
+                                 grepl("_pheno",name) ~ "Clinical [full]",
+                                 TRUE ~ "Clinical and genetic"
+                                 
+           )
+    ) 
+}
+
+######
+### RUN
+######
+
+#Across each fit, identifying the model by characteristics/names, determine mean shap values
+allShaps <- mapply(function(x,name){
+  
+  #Obtain data to which shapvals correspond - this is always a single matrix
+  shapX <-  x$X %>%
+    as.data.frame() %>%
+    mutate(across(everything(),~minmax(.))) %>%
+    pivot_longer(cols=everything(),names_to = "Feature",values_to = "FeatureValue") %>%
+    mutate(ID=row_number())
+  
+  #For multiclass summaries, mapply across each list element and class number
+  if("list" %in% class(x$S) && length(x$S)>2){
+    
+    #Obtain shap values
+    shapJ <- mapply(pivotSHAP,x$S,
+                    num=paste0("Class ",1:length(x$S)),
+                    name=name,
+                    values_to="SHAPValue",
+                    SIMPLIFY = FALSE) %>%
+      lapply(.,full_join,shapX,by=c("Feature", "ID")) %>%
+      lapply(.,select,-ID)
+    
+    SHAPdf <- do.call(rbind,shapJ)
+  } else {
+    #For binary summaries apply function once [note that binary objectives return list class with identical values in opposing directions according to the 'positive' class]
+    if("list" %in% class(x$S)){ matS <- x$S[[1]]
+    } else { matS <- x$S }
+    
+    shapS <- pivotSHAP(matS,num="Binary",name=name,values_to="SHAPValue")
+    
+    SHAPdf<- full_join(shapS,shapX,by=c("Feature", "ID")) %>%
+      select(-ID)
+  }
+  return(SHAPdf)
+},shapFits,names(shapFits),
+SIMPLIFY = FALSE)
+
+
+# ### Generate faceted beeswarm plots for each xgboost algorithm [not run]
+
+# #Concatenate binary and multiclass objectives for Xgboost algorithms
+# collect<-list(dataconfig=c("Clinical \\[full\\]","Clinical \\[matched\\]", "Clinical and genetic"),algorithm="xgb.Booster")
+# 
+# #Concatenate across multi=class and binary models according to data config; keep to only xgboost algorithms
+# collectShaps <- list()
+# for(i in 1:3){
+#   collectShaps[[i]] <- do.call(rbind,allShaps[sapply(allShaps,function(x){
+#     any(grepl(collect$dataconfig[i],x$data_config)) & any(grepl(collect$algorithm,x$Model))
+#   })])
+#   
+#   names(collectShaps)[i] <- collect$dataconfig[i]
+# }
+#
+# shapBees<- lapply(collectShaps,function(x){
+#   
+#   fig<- x %>%
+#     #slice_sample(n=1000) %>% #Downsample
+#     mutate(Feature=recode(Feature,!!!recodes),
+#            Feature=factor(Feature,levels=levels(shapBars_data$Feature)[levels(shapBars_data$Feature) %in% Feature]),
+#            class = as.factor(class)
+#     ) %>%
+#     ggplot(aes(x = SHAPValue, y = Feature,color=FeatureValue))+
+#     facet_wrap(~class,nrow=1)+
+#     #From ggbeeswarm, quasirandom gives violin-like plots
+#     #geom_point(position = position_quasirandom(width=0.4,varwidth = TRUE))+
+#     geom_quasirandom(varwidth = TRUE)+
+#     geom_vline(xintercept = 0,lty=2)+
+#     theme_bw()+
+#     labs(x = "SHAP value",y = "Feature",colour="Feature value\n(min-max scaled)")+
+#     scale_color_distiller(palette="RdYlBu")+
+#     theme(legend.position = "right",
+#           plot.title.position = "plot")
+#   return(fig)
+# })
+#
+# ## Save to file
+#path <- "~/Downloads"
+#ggsave(file.path(path,paste0("shapBeeswarm_v4.png")),shapBees$`Clinical and genetic`,height=130,width=210,units="mm")
+
+### Not run syntax to generate a plot with everything all in one figure
+# allInOne <- do.call(rbind,collectShaps)
+# 
+# #Try doing all in one fig
+# allInOneFig<- allInOne %>%
+#   #slice_sample(n=1000) %>% #Downsample
+#   mutate(Feature=recode(Feature,!!!recodes),
+#          Feature=factor(Feature,levels=levels(shapBars_data$Feature)[levels(shapBars_data$Feature) %in% Feature]),
+#          class = as.factor(class)
+#   ) %>%
+#     ggplot(aes(x = SHAPValue, y = Feature,color=FeatureValue))+
+#     facet_grid(cols=vars(class),rows=vars(data_config),scales="free_y",space="free_y")+
+#     #From ggbeeswarm, quasirandom gives violin-like plots
+#     #geom_point(position = position_quasirandom(width=0.4,varwidth = TRUE))+
+#     geom_quasirandom(varwidth = TRUE)+
+#     geom_vline(xintercept = 0,lty=2)+
+#     theme_bw()+
+#     labs(x = "SHAP value",y = "Feature",colour="Feature value\n(min-max scaled)")+
+#     scale_color_distiller(palette="RdYlBu")+
+#     theme(legend.position = "right",
+#           plot.title.position = "plot")
+
+#ggsave(file.path(path,paste0("shapBeeswarm_allinone.png")),allInOneFig,height=140,width=210,units="mm")
+
+#Generate legends to make clear the contents of each figure
+captions <- paste0("Figure SX",seq_along(shapFits),". Feature importance for ",
+       ifelse(grepl("xgb.Booster",names(shapFits)),"eXtreme Gradient Boosting","Random Forest"),
+       " algorithm predicting class membership ",
+       ifelse(grepl("class12",names(shapFits)),"across classes 1 and 2","with a multiclass objective"),
+       " in the ",
+       ifelse(grepl("rarepathways",names(shapFits)),
+              ifelse(grepl("filter",names(shapFits)),"clinical [matched]","clinical and genetic"),
+                                                    "clinical [full]"),
+       " dataset.",
+       ifelse(grepl("class12",names(shapFits))," Positive SHAP values indicate increased predicted probability of being in class 1.","")
+)
+
+
+### Generate beeswarm plot for each ML algorithm with faceting of multiclass variables
+shapBees<- mapply(function(x,sub){
+
+  fig<- x %>%
+    #slice_sample(n=1000) %>% #Downsample
+    mutate(Feature=recode(Feature,!!!recodes),
+           class = as.factor(class)
+    ) %>%
+    ggplot(aes(x = SHAPValue, y = Feature,color=FeatureValue))+
+    {if(!grepl("across classes 1 and 2",sub)) facet_wrap(~class,nrow=1)}+
+    geom_quasirandom(varwidth = TRUE)+     #From ggbeeswarm, quasirandom gives violin-like plots
+    geom_vline(xintercept = 0,lty=2)+
+    theme_bw()+
+    labs(x = "SHAP value",y = "Feature",colour="Feature value\n(min-max scaled)",subtitle =str_wrap(sub, 140)
+           )+
+    scale_color_distiller(palette="RdYlBu")+
+    theme(legend.position = "right",
+          plot.title.position = "plot")
+  return(fig)
+},allShaps,captions,SIMPLIFY = FALSE)
+
+## Save individual figs to pdf file. Note that this is heavily overplotted and therefore the file is large
+path <- "~/Downloads"
+pdf(file.path(path,paste0("shapBeeswarm_v5.pdf")),height=6,width=10)
+for (i in seq_along(shapBees)) print(shapBees[[i]])
+dev.off()
+
+
+```
+
+
+
+
+
+##### Descriptive plots
+
+Generate descriptive plots comparing the classes
+
+```{r}
+library(survival)
+library(survminer)
+library(cowplot)
+
+data <- data.table::fread("/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/JNT_JanFinal_savedata_C5/completesample/saved_mplusfit.tsv")
+
+#Prepare list storing continuous variables
+ContPlots <- list(DisDur=NULL,AgeOns=NULL,DiagDel=NULL)
+
+#Survival KM
+#Palette plot for classes
+cbbPalette <- c("gold", "violetred", "#56B4E9", "#000000", "limegreen", "#D55E00", "#CC79A7", "#F0E442")
+
+#Fit survival curve
+KMfit<- survfit(Surv(Time_to_death_or_last_followup_years,survival_status_bin) ~ C,data=data)
+
+#Build KM plot
+ContPlots[[1]] <- ggsurvplot(KMfit,data=data,
+                     pval = F,pval.method=F, conf.int = T, risk.table = F,
+                     xlab= "Time (years)",
+                     legend="none",
+                     palette = cbbPalette,
+                     ggtheme = theme_bw()
+)[[1]]
+
+#Age of Onset KM
+aooKMfit<- survfit(Surv(Age_at_onset_years) ~ C,data=data)
+names(aooKMfit$strata)<- gsub("C=","", names(aooKMfit$strata))
+
+#Build KM plot
+ContPlots[[2]] <- ggsurvplot(aooKMfit,data=data,
+                     pval = F,pval.method=F, conf.int = T, risk.table = F,
+                     xlab= "Time (years)",
+                     ylab= "1 - Onset probability",
+                     legend="top",
+                     palette = cbbPalette,
+                     ggtheme = theme_bw(),
+                     legend.title="Class"
+)[[1]]
+ 
+
+
+#Diagnostic delay density
+ContPlots[[3]]<- data %>%
+  filter(!is.na(CTYDEL)) %>%
+  mutate(C=as.factor(C)) %>%
+ggplot(data=.,aes(CTYDEL,color=C,fill=C))+
+  geom_density(alpha=0.7)+
+  theme_bw()+
+  scale_fill_manual(values=cbbPalette,guide="none")+
+  scale_color_manual(values=cbbPalette,guide="none")+
+  #guides(fill=guide_legend(override.aes = list(alpha = 1)))+
+  labs(x="Diagnostic delay (standardised)",y="Density",fill="Class")
+
+
+#Diagnostic delay density
+CategoryDf<- data %>%
+  dplyr::select(C,new_num_id,Sex_at_birth,Phenotype,Site_of_Onset) %>%
+  mutate(Sex_at_birth=case_when(Sex_at_birth==1 ~ "Male",
+                                Sex_at_birth==2 ~ "Female",
+                                TRUE ~ NA_character_),
+         Phenotype=case_when(Phenotype==1 ~ "ALS",
+                             Phenotype==2 ~ "PLS",
+                             Phenotype==3 ~ "PMA",
+                             TRUE ~ NA_character_),
+         Site_of_Onset=case_when(Site_of_Onset==1 ~ "Other",
+                                 Site_of_Onset==2 ~ "Bulbar",
+                             TRUE ~ NA_character_),
+         C=as.factor(C)) %>%
+  reshape2::melt(measure.vars=c("Sex_at_birth","Phenotype","Site_of_Onset")) %>%
+  mutate(#C=paste0("Class ", C),
+         variable=case_when(variable=="Sex_at_birth" ~ "Sex",
+                            variable=="Phenotype" ~ "Clinical\ndiagnosis",
+                            variable=="Site_of_Onset" ~ "Site of\nonset"
+
+           ),
+         value=as.factor(value)) %>%
+  filter(!is.na(value)) #Remove any NAs?
+
+var<- c("Sex","Clinical\ndiagnosis","Site of\nonset")
+BarPlots<- lapply(var,function(x,data){
+  
+  #Create gradient-type scale according to number of classes
+  nsteps<- length(unique(data$value[data$variable==x]))
+  gradPalette  <- scales::seq_gradient_pal(low = "springgreen", high = "springgreen4", space = "Lab")(1:nsteps/nsteps)
+  
+  #Generate plot
+  data %>%
+    filter(variable==x) %>%
+    ggplot(data=.,aes(x=C,fill=value))+
+    geom_bar(position='fill',alpha=1)+
+    labs(fill=x,y="Percentage",x="Class")+
+    scale_y_continuous(expand = expansion(mult = c(0,0)), #Set the Y-axis to not truncate
+      labels=scales::label_number(scale = 1*100,accuracy = 1))+ #Convert to percentage
+    scale_fill_manual(values=gradPalette)+
+    theme_bw()+
+    #guides(fill=guide_legend(nrow=nsteps-1, byrow=TRUE))+
+    theme(legend.position = "bottom",axis.line.y = element_blank())
+},CategoryDf)
+
+#Extract and then drop the legend
+legend<- get_legend(ContPlots[[2]])
+ContPlots[[2]] <- ContPlots[[2]] +
+  theme(legend.position = "none")
+
+#Collect the main panels with cowplot
+Panels<- plot_grid(plotlist = c(ContPlots,BarPlots),
+  labels = "AUTO",
+  label_size = 8,
+  label_x = 0, label_y = 1
+)
+
+#Add the legends
+FullDescriptives<- plot_grid(legend,Panels,ncol=1,rel_heights = c(.1, 1))
+
+#Save the figure
+path <- "~/Downloads"
+ggsave(plot=FullDescriptives,
+       filename = file.path(path,paste0("DescriptiveStatFigure.pdf")),
+       units="mm",width=230,height=140)
+```
+
+
+### Compare the distribution of people across training-dataset and joint dataset 5-class models
+
+This chunk generates Sankey diagrams across 2-panels. Panel A is the distribution of people across classes from the two models in the training sample (Project MinE). Panel B is the same but for the validation (STRENGTH) data.
+
+```{r}
+
+library(data.table)
+library(tidyverse)
+library(ggsankey) #https://r-charts.com/flow/sankey-diagram-ggplot2/
+
+#Colour palette for sankey diagram
+cbbPalette <- c("gold", "violetred", "#56B4E9", "#000000", "limegreen", "#D55E00", "#CC79A7", "#F0E442")
+
+#Specify paths to the LCA classified datasets
+#trainingdata and testdata are based on the Project MinE 5-class model
+#jointdata is based on the ProjectMiNE+STRENGTH 5-class model
+modelpaths<-c(trainingdata="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/PM_JanFinal_savedata_C5/completesample/saved_mplusfit.tsv",
+  testdata="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/PM_JanFinal_savedata_C5/completesample/STR_NOPM_ANY_predict_cens_as_is/LCAfit_new_data.tsv",
+  jointdata="/Users/tom/OneDrive - King's College London/PhD/PhD project/Latent cluster analysis/Writeup/WriteupModels/JNT_JanFinal_savedata_C5/completesample/saved_mplusfit.tsv")
+  
+models<- lapply(modelpaths,fread)
+
+#Save data combos in a list
+harmoniseC <- list(train=NA,test=NA,unify=NA)
+
+#Extract people from training data and their class assignments from the two models
+harmoniseC$train <- left_join(models$trainingdata,models$jointdata,by="new_num_id") %>%
+  select("new_num_id","C.x","C.y")
+
+#Extract people from test data and their class assignments from the two models
+harmoniseC$test <- left_join(models$testdata,models$jointdata,by="new_num_id") %>%
+  select("new_num_id","C.x","C.y")
+
+#Extract people from both training and test data and their class assignments from the two models
+harmoniseC$unify <- full_join(models$trainingdata,models$testdata,by=c("new_num_id","C")) %>%
+  left_join(models$jointdata,by="new_num_id") %>%
+  select("new_num_id","C.x","C.y")
+
+#Tabulate classes in training data and sort largest class to smallest
+classOrder<- data.frame(x=names(rev(sort(table(harmoniseC$train$C.x)))),y=NA)
+ymatchedIndex <- vector(mode="list",length=nrow(classOrder))
+
+#Loop across subset rows and extract the most likely equal class based on largest overlap. Only search against classes NOT already classified
+for(i in 1:nrow(classOrder)){
+  xSubgroup<- harmoniseC$train[harmoniseC$train$C.x==classOrder$x[i]]
+  tabl <- table(xSubgroup$C.y[!xSubgroup$C.y %in% classOrder$y])
+  classOrder$y[i] <- names(tabl)[tabl==max(tabl)]
+  ymatchedIndex[[i]] <- harmoniseC$train$C.y==classOrder$y[i]
+}
+
+#Prepare a 'total' row of the summary
+classOrder[nrow(classOrder)+1,] <- "Total"
+
+#After matching complete, determine class matching properties
+#PM indicates the training dataset model
+#Joint indicates the 'joint' dataset model
+for(j in 1:length(harmoniseC)){  
+  propmatchof_Y<- ncol(classOrder)+1
+  propmatchof_X<- propmatchof_Y+1
+  xClassN<- propmatchof_Y+2
+  yClassN<- propmatchof_Y+3
+  classOrder[propmatchof_Y:yClassN] <- NA
+  names(classOrder)[propmatchof_Y:yClassN] <- paste0(c("Prop_PM_matching_joint_","Prop_Joint_matchingPM","N_PMfit_","N_Jointfit_"),names(harmoniseC)[j],"dataset")
+  for(i in 1:nrow(classOrder)){
+    
+    if(i!=nrow(classOrder)){
+      #Calculate proportion of proportion of people assigned to a given class in the joint dataset model with a matching assignment in the PM only model fit
+      classOrder[i,propmatchof_Y] <- sum(harmoniseC[[j]]$C.y==classOrder$y[i] & harmoniseC[[j]]$C.x==classOrder$x[i])/sum(harmoniseC[[j]]$C.y==classOrder$y[i])
+      classOrder[i,propmatchof_X] <- sum(harmoniseC[[j]]$C.y==classOrder$y[i] & harmoniseC[[j]]$C.x==classOrder$x[i])/sum(harmoniseC[[j]]$C.x==classOrder$x[i])
+      classOrder[i,xClassN] <- sum(harmoniseC[[j]]$C.x==classOrder$x[i])
+      classOrder[i,yClassN] <- sum(harmoniseC[[j]]$C.y==classOrder$y[i])
+    } else {
+      classOrder[i,propmatchof_Y] <- sum(paste0(harmoniseC[[j]]$C.y,"_",harmoniseC[[j]]$C.x) %in% paste0(classOrder$y[-i],"_",classOrder$x[-i]))/nrow(harmoniseC[[j]])
+      classOrder[i,propmatchof_X] <- classOrder[i,propmatchof_Y]
+      classOrder[i,xClassN] <- nrow(harmoniseC[[j]])
+      classOrder[i,yClassN] <- nrow(harmoniseC[[j]])
+    }
+  }
+}
+names(classOrder)[1:2] <- c("PMfit_class","Jointfit_class")
+
+write.csv(classOrder,file=file.path(dirname(modelpaths[["jointdata"]]),"PMfit_vs_Jointfit.csv"),row.names = FALSE)
+
+#Dataset is the data to plot
+#overlapinfo is a 2 column dataframe indicaitng the overlaps between the classes
+
+plotSankey<- function(dataset,overlapinfo){
+  #Prepare the Discovery sample for a sankey plot
+  sankeyData<- dataset %>%
+    mutate(Discovery=as.factor(C.x),
+           Joint=as.factor(C.y))
+  
+  levels(sankeyData$Discovery) <- paste0(levels(sankeyData$Discovery)," [",round(overlapinfo[,1]*100,1),"%]")
+  levels(sankeyData$Joint) <- paste0(levels(sankeyData$Joint)," [",round(overlapinfo[,2]*100,1),"%]")
+  
+  
+  sankeyPlot<- sankeyData %>%
+    make_long(Discovery,Joint) %>%
+    ggplot(., aes(x = x, 
+                  next_x = next_x, 
+                  node = node, 
+                  next_node = next_node,
+                  fill = factor(node),
+                  label = node)) +
+    geom_sankey(flow.alpha = 0.5, node.color = 1,width=0.6) +
+    geom_sankey_label(size = 3.5, color = 1, fill = "white") +
+    theme_sankey(base_size = 16)+
+    scale_fill_manual(values=sapply(cbbPalette,rep,2))+
+    scale_x_discrete(position = "top")+
+    theme(legend.position = "none",
+          axis.title.x = element_blank())
+  
+  return(sankeyPlot)
+}
+
+#Generate Sankey plot for the train data
+sankeyTrain <- plotSankey(harmoniseC$train,classOrder[1:5,c("Prop_Joint_matchingPMtraindataset","Prop_PM_matching_joint_traindataset")])
+
+#Generate for the test data
+sankeyTest <- plotSankey(harmoniseC$test,classOrder[1:5,c("Prop_Joint_matchingPMtestdataset","Prop_PM_matching_joint_testdataset")])
+
+
+sankeyFig<- cowplot::plot_grid(sankeyTrain,sankeyTest,nrow=1,labels=c("A","B"))
+
+path <- "~/Downloads"
+ggsave(plot=sankeyFig,
+       filename = file.path(path,paste0("CompareModelsSankey.pdf")),
+       units="mm",width=160,height=160)
+
+```
+
+
+
